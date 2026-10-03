@@ -251,6 +251,18 @@ def credential() -> Callable[[], str]:
     return access_token
 
 
+def list_models() -> list[tuple[str, str]]:
+    """(name, model ID) for each model the signed-in plan offers, in OpenAI's order."""
+    response = requests.get(f"{API_BASE}/models", timeout=10,
+                            headers={"Authorization": f"Bearer {access_token()}"})
+    response.raise_for_status()
+    models = [m for m in response.json().get("models", [])
+              if isinstance(m, dict) and isinstance(m.get("slug"), str)
+              and m.get("visibility") == "list" and m.get("supported_in_api", True)]
+    models.sort(key=lambda m: m.get("priority") or 0)
+    return [(m.get("display_name") or m["slug"], m["slug"]) for m in models]
+
+
 # --- signing in and out --------------------------------------------------------------
 
 class _Callback:

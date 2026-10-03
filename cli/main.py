@@ -11,6 +11,7 @@ from cli.prompts import filter_analysts_for_asset_type, parse_analysts
 from cli.run import run_analysis
 from tradingagents.backtest import iter_grid, run_backtest, summarize
 from tradingagents.default_config import DEFAULT_CONFIG
+from tradingagents.llm_clients.openai_client import SIGNED_IN_PROVIDERS
 from tradingagents.portfolio import load_portfolio
 
 # prompt_toolkit's win32 output module is importable only on Windows (it asserts
@@ -159,8 +160,8 @@ def backtest(
         console.print(f"[yellow]unsettled:[/yellow] {ticker}: {reason}")
 
 
-class Plan(StrEnum):
-    chatgpt = "chatgpt"
+# The plans `login` and `logout` take: the providers signed in to, not keyed.
+Plan = StrEnum("Plan", {name: name for name in SIGNED_IN_PROVIDERS})
 
 
 @app.command()

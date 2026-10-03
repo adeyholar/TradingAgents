@@ -1,3 +1,4 @@
+import logging
 import os
 import re
 from collections.abc import Callable
@@ -12,6 +13,8 @@ from .api_key_env import get_api_key_env
 from .base_client import BaseLLMClient, normalize_content
 from .capabilities import get_capabilities
 from .validators import validate_model
+
+logger = logging.getLogger(__name__)
 
 
 class NormalizedChatOpenAI(ChatOpenAI):
@@ -163,6 +166,48 @@ class MinimaxChatOpenAI(NormalizedChatOpenAI):
         return payload
 
 
+# Settings a ChatGPT plan refuses.
+_PLAN_REFUSED = ("temperature", "top_p", "max_tokens")
+
+
+class ChatGPTPlanChatOpenAI(NormalizedChatOpenAI):
+    """The person's ChatGPT plan through OpenAI's Responses API.
+
+    Plan usage accepts no stored responses and no ``system`` role, and refuses
+    sampling and length settings. Responses stream and are not stored; system
+    instructions are sent as ``developer`` messages, OpenAI's name for the same
+    role; refused settings are dropped with a warning; no API organization or
+    project is sent.
+    """
+
+    def __init__(self, **kwargs):
+        for name in _PLAN_REFUSED:
+            if kwargs.pop(name, None) is not None:
+                logger.warning("A ChatGPT plan does not accept %s; it is not sent.", name)
+        kwargs.setdefault("streaming", True)
+        kwargs.setdefault("store", False)
+        super().__init__(**kwargs)
+        # The sign-in names the account; an organization or project set for API
+        # keys (OPENAI_ORG_ID, OPENAI_PROJECT_ID) must not travel with it.
+        self.openai_organization = None
+        for client in (self.root_client, self.root_async_client):
+            client.organization = None
+            client.project = None
+
+    def _get_request_payload(self, input_, *, stop=None, **kwargs):
+        payload = super()._get_request_payload(input_, stop=stop, **kwargs)
+        for item in payload.get("input") or []:
+            if isinstance(item, dict) and item.get("role") == "system":
+                item["role"] = "developer"
+        return payload
+
+
+def _chatgpt_credential() -> Callable[[], str]:
+    from .chatgpt_auth import credential
+
+    return credential()
+
+
 # Kwargs forwarded from user config to ChatOpenAI
 _PASSTHROUGH_KWARGS = (
     "timeout", "max_retries", "reasoning_effort", "temperature", "max_tokens",
@@ -233,11 +278,19 @@ OPENAI_COMPATIBLE_PROVIDERS: dict[str, ProviderSpec] = {
     "ollama":     ProviderSpec(base_url="http://localhost:11434/v1", base_url_env="OLLAMA_BASE_URL",
                                key_optional=True, placeholder_key="ollama",
                                chat_class=LocalCompatibleChatOpenAI),
+    # The person's ChatGPT plan, through their own sign-in.
+    "chatgpt":    ProviderSpec(base_url="https://api.openai.com/v1", chat_class=ChatGPTPlanChatOpenAI,
+                               use_responses_api=True, credential=_chatgpt_credential,
+                               pinned_base_url=True),
     # Generic endpoint: user supplies base_url; key optional (keyless local).
     "openai_compatible": ProviderSpec(
         require_base_url=True, key_optional=True, chat_class=LocalCompatibleChatOpenAI
     ),
 }
+
+
+# Providers the user signs in to instead of setting an API key.
+SIGNED_IN_PROVIDERS = tuple(key for key, spec in OPENAI_COMPATIBLE_PROVIDERS.items() if spec.credential)
 
 
 def check_endpoint(provider: str, base_url: str | None) -> None:

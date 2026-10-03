@@ -8,7 +8,7 @@ import typer
 from rich.align import Align
 from rich.panel import Panel
 
-from cli.announcements import display_announcements, fetch_announcements
+from cli import updates
 from cli.display import (
     console,
 )
@@ -124,9 +124,11 @@ def _prompt_selections(prefs, flags):
     console.print()
     console.print()  # Add vertical space before announcements
 
-    # Fetch and display announcements (silent on failure)
-    announcements = fetch_announcements()
-    display_announcements(console, announcements)
+    # What's new comes from a cache refreshed in the background, and only for
+    # someone at a terminal: a run never waits on it and unattended runs skip it.
+    if updates.enabled():
+        updates.show(console)
+        updates.start_background_refresh()
 
     def create_question_box(title, prompt, default=None):
         box_content = f"[bold]{title}[/bold]\n"

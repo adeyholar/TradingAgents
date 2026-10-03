@@ -1,6 +1,9 @@
 import sys
+from enum import StrEnum
+from typing import Annotated
 
 import typer
+from rich.markup import escape
 
 from cli.display import console
 from cli.models import AnalystType, AssetType
@@ -154,6 +157,40 @@ def backtest(
         console.print(f"[yellow]failed:[/yellow] {ticker} {date}: {reason}")
     for ticker, reason in result.settlement_failures:
         console.print(f"[yellow]unsettled:[/yellow] {ticker}: {reason}")
+
+
+class Plan(StrEnum):
+    chatgpt = "chatgpt"
+
+
+@app.command()
+def login(plan: Annotated[Plan, typer.Argument(help="The plan to sign in with")]):
+    """Sign in with your ChatGPT Plus or Pro plan, for the chatgpt provider."""
+    from tradingagents.llm_clients import chatgpt_auth
+
+    try:
+        # One unwrapped line, so the sign-in address can be copied whole.
+        email = chatgpt_auth.sign_in(
+            say=lambda line: console.print(line, soft_wrap=True, markup=False, highlight=False))
+    except chatgpt_auth.ChatGPTAuthError as exc:
+        console.print(f"[red]{escape(str(exc))}[/red]")
+        raise typer.Exit(code=1) from None
+    console.print(f"[green]Signed in to ChatGPT as {escape(email)}.[/green]")
+
+
+@app.command()
+def logout(plan: Annotated[Plan, typer.Argument(help="The plan to sign out of")]):
+    """Sign out of your ChatGPT plan: revoke this machine's access and forget it."""
+    from tradingagents.llm_clients import chatgpt_auth
+
+    outcome = chatgpt_auth.sign_out()
+    if outcome == "revoked":
+        console.print("Signed out of ChatGPT.")
+    elif outcome == "forgotten":
+        console.print("[yellow]Signed out here, but OpenAI could not be reached to revoke the sign-in; "
+                      "it stays valid at OpenAI until it expires.[/yellow]")
+    else:
+        console.print("Not signed in to ChatGPT.")
 
 
 if __name__ == "__main__":

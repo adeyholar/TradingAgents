@@ -1,5 +1,6 @@
 import os
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
@@ -204,6 +205,11 @@ class ProviderSpec:
     placeholder_key: str = "EMPTY"            # sent when no key is available (keyless local servers)
     require_base_url: bool = False            # error if no base_url is resolved (generic endpoint)
     use_responses_api: bool = False           # native OpenAI Responses API
+    # A provider the user signs in to: ``credential()`` returns the api_key callable
+    # (a fresh token per request) or raises when nobody is signed in. Its token goes
+    # only to its pinned base_url, and never alongside an API key.
+    credential: Callable[[], Callable[[], str]] | None = None
+    pinned_base_url: bool = False             # refuse any other endpoint for this provider
 
 
 # Single source of truth for the OpenAI-compatible provider family. Dual-region
@@ -232,6 +238,14 @@ OPENAI_COMPATIBLE_PROVIDERS: dict[str, ProviderSpec] = {
         require_base_url=True, key_optional=True, chat_class=LocalCompatibleChatOpenAI
     ),
 }
+
+
+def check_endpoint(provider: str, base_url: str | None) -> None:
+    """Raise ValueError when a provider pinned to its own endpoint is pointed elsewhere."""
+    spec = OPENAI_COMPATIBLE_PROVIDERS.get(provider.lower())
+    if spec is not None and spec.pinned_base_url and base_url and base_url != spec.base_url:
+        raise ValueError(f"Provider '{provider}' only connects to {spec.base_url}; "
+                         "unset backend_url / TRADINGAGENTS_LLM_BACKEND_URL for it.")
 
 
 def is_openai_compatible(provider: str) -> bool:
@@ -289,6 +303,7 @@ class OpenAIClient(BaseLLMClient):
             # OLLAMA_BASE_URL) > provider default. None means use the SDK default.
             env_base_url = os.environ.get(spec.base_url_env) if spec.base_url_env else None
             base_url = self.base_url or env_base_url or spec.base_url
+            check_endpoint(self.provider, base_url)
             if spec.require_base_url and not base_url:
                 raise ValueError(
                     f"Provider '{self.provider}' requires a base_url. Set it via "
@@ -301,9 +316,14 @@ class OpenAIClient(BaseLLMClient):
 
             # API key: required unless key_optional; keyless local servers get a
             # placeholder. The env-var name is the single source in api_key_env.
+            # A signed-in provider sends its own credential, and only that.
             api_key_env = get_api_key_env(self.provider)
             api_key = os.environ.get(api_key_env) if api_key_env else None
-            if api_key:
+            if spec.credential is not None:
+                if "api_key" in self.kwargs:
+                    raise ValueError(f"Provider '{self.provider}' uses its sign-in, not an api_key.")
+                llm_kwargs["api_key"] = spec.credential()
+            elif api_key:
                 llm_kwargs["api_key"] = api_key
             elif spec.key_optional:
                 llm_kwargs["api_key"] = spec.placeholder_key
